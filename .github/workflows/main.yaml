@@ -1,0 +1,76 @@
+name: Build and Deploy NextJS Application
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Code from Repository ⤵️
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx 🏗️
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Create .env file 📄
+        run: |
+          echo "${{ vars.ENV }}" > .env
+
+      - name: Log in to Docker Hub Container Registry 🔑
+        run: echo "${{ vars.DOCKER_HUB_PASSWORD }}" | docker login -u ${{ vars.DOCKER_HUB_USERNAME }} --password-stdin
+
+      - name: Build and push Docker image 🐋
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: "${{ vars.DOCKER_HUB_USERNAME }}/${{ vars.IMAGE_NAME }}:${{ vars.IMAGE_TAG }}"
+
+  deploy:
+    runs-on: ubuntu-22.04
+
+    needs: build
+
+    steps:
+      - name: Deploy Docker Container to VPS 🚀
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          port: ${{ vars.PORT }}
+          host: ${{ vars.HOST }}
+          key: ${{ vars.PRIVATE_KEY }}
+          username: ${{ vars.USERNAME }}
+          script: |
+            echo -e "Logging in to Docker Hub Registry 🗝️"
+            echo "${{ vars.DOCKER_HUB_PASSWORD }}" | docker login -u ${{ vars.DOCKER_HUB_USERNAME }} --password-stdin
+
+            echo -e "Pulling the latest image from Docker Hub 📥"
+            docker image pull "${{ vars.DOCKER_HUB_USERNAME }}/${{ vars.IMAGE_NAME }}:${{ vars.IMAGE_TAG }}"
+
+            if [ "$(docker ps -q -f name=cicd-demo)" ]; then
+                echo -e "Stopping running container: cicd-demo 🛑"
+                docker container stop cicd-demo
+            fi
+
+            if [ "$(docker container ls -a -q -f name=cicd-demo)" ]; then
+                echo -e "Removing stopped container: cicd-demo 🚧"
+                docker container rm cicd-demo
+            fi
+
+            echo -e "Running the new container: cicd-demo 🛩️"
+            docker container run -d \
+              --name cicd-demo \
+              -p 3030:3000 \
+              --restart on-failure:3 \
+              "${{ vars.DOCKER_HUB_USERNAME }}/${{ vars.IMAGE_NAME }}:${{ vars.IMAGE_TAG }}"
+
+            echo -e "Pruning unused Docker images 🧹"
+            docker image prune -f
+
+            echo -e "Your application is live! 🎉"
